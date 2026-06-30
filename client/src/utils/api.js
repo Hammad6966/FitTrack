@@ -78,4 +78,6 @@ export const adminAPI = {
   updateUserRole:    (id, role)   => api.put(`/admin/users/${id}/role`, { role }),
   toggleUserStatus:  (id)         => api.put(`/admin/users/${id}/status`),
   deleteUser:        (id)         => api.delete(`/admin/users/${id}`),
+  getPosts:          (params)     => api.get('/admin/posts', { params }),
+  approvePost:       (id)         => api.put(`/admin/posts/${id}/approve`),
 };

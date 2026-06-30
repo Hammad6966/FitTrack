@@ -156,4 +156,26 @@ const getAnalytics = async (req, res, next) => {
   }
 };
 
-module.exports = { getDashboard, getUsers, updateUserRole, toggleUserStatus, deleteUser, getAnalytics };
+const getAllPosts = async (req, res, next) => {
+  try {
+    const { page = 1, limit = 20 } = req.query;
+    const skip  = (parseInt(page) - 1) * parseInt(limit);
+    const total = await Post.countDocuments();
+    const data  = await Post.find()
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(parseInt(limit))
+      .populate('author', 'name email');
+    res.status(200).json({
+      success: true,
+      data,
+      total,
+      page:  parseInt(page),
+      pages: Math.ceil(total / parseInt(limit)),
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+module.exports = { getDashboard, getUsers, updateUserRole, toggleUserStatus, deleteUser, getAnalytics, getAllPosts };

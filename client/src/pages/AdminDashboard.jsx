@@ -6,7 +6,7 @@ import {
   FiGrid, FiUsers, FiActivity, FiBookOpen, FiMessageSquare,
   FiBarChart2, FiSettings, FiLogOut, FiX, FiPlus, FiEdit2,
   FiTrash2, FiSearch, FiTrendingUp, FiTrendingDown, FiCheck,
-  FiToggleLeft, FiToggleRight, FiStar,
+  FiToggleLeft, FiToggleRight, FiStar, FiSave,
 } from 'react-icons/fi';
 import { FaDumbbell, FaUtensils, FaFileAlt } from 'react-icons/fa';
 import {
@@ -14,7 +14,7 @@ import {
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend,
 } from 'recharts';
 import { useAuth } from '../hooks/useAuth';
-import { adminAPI, exerciseAPI } from '../utils/api';
+import { adminAPI, exerciseAPI, mealAPI, communityAPI } from '../utils/api';
 
 const GREEN = '#22c55e';
 const CHART_COLORS = ['#22c55e', '#3b82f6', '#f59e0b', '#ef4444', '#8b5cf6', '#06b6d4'];
@@ -30,6 +30,14 @@ const CAT_COLORS = {
   strength:          'bg-blue-500/15 text-blue-400 border-blue-500/20',
   yoga:              'bg-purple-500/15 text-purple-400 border-purple-500/20',
   flexibility:       'bg-pink-500/15 text-pink-400 border-pink-500/20',
+  balance:           'bg-teal-500/15 text-teal-400 border-teal-500/20',
+};
+const MEAL_CAT_COLORS = {
+  diabetes_management: 'bg-green-500/15 text-green-400 border-green-500/20',
+  weight_loss:         'bg-red-500/15 text-red-400 border-red-500/20',
+  muscle_building:     'bg-blue-500/15 text-blue-400 border-blue-500/20',
+  weight_gain:         'bg-orange-500/15 text-orange-400 border-orange-500/20',
+  maintenance:         'bg-gray-500/15 text-gray-400 border-gray-500/20',
 };
 const POST_CAT_COLORS = {
   success_story: 'bg-yellow-500/15 text-yellow-400 border-yellow-500/20',
@@ -37,6 +45,7 @@ const POST_CAT_COLORS = {
   nutrition:     'bg-green-500/15 text-green-400 border-green-500/20',
   exercise:      'bg-orange-500/15 text-orange-400 border-orange-500/20',
   general:       'bg-gray-500/15 text-gray-400 border-gray-500/20',
+  motivation:    'bg-purple-500/15 text-purple-400 border-purple-500/20',
 };
 
 const GRADIENTS = [
@@ -75,8 +84,48 @@ const ChartTooltip = ({ active, payload, label }) => {
 
 const fadeUp = { hidden: { opacity: 0, y: 14 }, visible: { opacity: 1, y: 0, transition: { duration: 0.3 } } };
 
+function Spinner({ size = 'w-4 h-4' }) {
+  return <div className={`${size} border-2 border-white/30 border-t-white rounded-full animate-spin`} />;
+}
+
+function LoadingBox() {
+  return (
+    <div className="bg-gray-800/50 border border-gray-700/40 rounded-2xl p-8 text-center">
+      <div className="w-8 h-8 border-2 border-green-500 border-t-transparent rounded-full animate-spin mx-auto mb-3" />
+      <p className="text-gray-400 text-sm">Loading...</p>
+    </div>
+  );
+}
+
+/* ── FOOD ROWS (meal items) ── */
+function FoodRows({ items, onChange }) {
+  const blank = { name: '', calories: '' };
+  const update = (i, field, val) => { const n = [...items]; n[i] = { ...n[i], [field]: val }; onChange(n); };
+  const add    = () => onChange([...items, { ...blank }]);
+  const remove = (i) => items.length > 1 && onChange(items.filter((_, idx) => idx !== i));
+  return (
+    <div className="space-y-2">
+      {items.map((item, i) => (
+        <div key={i} className="flex gap-2">
+          <input value={item.name} onChange={(e) => update(i, 'name', e.target.value)}
+            placeholder="Food name" className="input-dark flex-1 text-xs py-2" />
+          <input type="number" value={item.calories} onChange={(e) => update(i, 'calories', e.target.value)}
+            placeholder="kcal" className="input-dark w-20 text-xs py-2" />
+          <button type="button" onClick={() => remove(i)} className="text-gray-600 hover:text-red-400 transition-colors flex-shrink-0">
+            <FiX size={13} />
+          </button>
+        </div>
+      ))}
+      <button type="button" onClick={add} className="flex items-center gap-1 text-green-400 hover:text-green-300 text-xs font-medium transition-colors">
+        <FiPlus size={11} /> Add item
+      </button>
+    </div>
+  );
+}
+
 /* ── EXERCISE MODAL ── */
-function ExerciseModal({ exercise, onClose, onSave }) {
+function ExerciseModal({ exercise, onClose, onSuccess }) {
+  const blankItem = { name: '', calories: '' };
   const [form, setForm] = useState(exercise ? {
     ...exercise,
     instructions: exercise.instructions?.length ? exercise.instructions : [''],
@@ -85,17 +134,35 @@ function ExerciseModal({ exercise, onClose, onSave }) {
     title: '', description: '', category: 'cardio', difficulty: 'beginner',
     duration: '', caloriesBurn: '', imageUrl: '', instructions: [''], tags: '',
   });
+  const [saving, setSaving] = useState(false);
 
   const updateInstruction = (i, val) => { const arr = [...form.instructions]; arr[i] = val; setForm({ ...form, instructions: arr }); };
   const addInstruction    = () => setForm({ ...form, instructions: [...form.instructions, ''] });
   const removeInstruction = (i) => setForm({ ...form, instructions: form.instructions.filter((_, idx) => idx !== i) });
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
     if (!form.title.trim()) { toast.error('Title is required'); return; }
-    onSave({ ...form, tags: form.tags ? form.tags.split(',').map((t) => t.trim()).filter(Boolean) : [] });
-    toast.success(exercise ? 'Exercise updated!' : 'Exercise added!');
-    onClose();
+    setSaving(true);
+    try {
+      const payload = {
+        ...form,
+        duration: +form.duration || 0,
+        caloriesBurn: +form.caloriesBurn || 0,
+        tags: form.tags ? form.tags.split(',').map((t) => t.trim()).filter(Boolean) : [],
+        instructions: form.instructions.filter((s) => s.trim()),
+      };
+      const { data: res } = exercise
+        ? await exerciseAPI.update(exercise._id, payload)
+        : await exerciseAPI.create(payload);
+      toast.success(exercise ? 'Exercise updated!' : 'Exercise added!');
+      onSuccess(res.data);
+      onClose();
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Failed to save exercise');
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
@@ -128,7 +195,7 @@ function ExerciseModal({ exercise, onClose, onSave }) {
               <label className="block text-gray-300 text-xs font-medium mb-1.5">Category</label>
               <select value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })} className="input-dark">
                 {['cardio','strength','yoga','flexibility','diabetes_friendly','balance'].map((c) => (
-                  <option key={c} value={c} className="bg-gray-800 capitalize">{c.replace('_', ' ')}</option>
+                  <option key={c} value={c} className="bg-gray-800 capitalize">{c.replace(/_/g, ' ')}</option>
                 ))}
               </select>
             </div>
@@ -178,8 +245,156 @@ function ExerciseModal({ exercise, onClose, onSave }) {
               ))}
             </div>
           </div>
-          <button type="submit" className="w-full py-3.5 bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-400 hover:to-emerald-500 text-white font-bold rounded-xl shadow-lg shadow-green-500/20 transition-all text-sm">
-            {exercise ? 'Save Changes' : 'Add Exercise'}
+          <button type="submit" disabled={saving}
+            className="w-full py-3.5 bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-400 hover:to-emerald-500 disabled:opacity-60 text-white font-bold rounded-xl shadow-lg shadow-green-500/20 transition-all text-sm flex items-center justify-center gap-2">
+            {saving ? <Spinner /> : null}
+            {saving ? 'Saving...' : exercise ? 'Save Changes' : 'Add Exercise'}
+          </button>
+        </form>
+      </motion.div>
+    </motion.div>
+  );
+}
+
+/* ── MEAL MODAL ── */
+const BLANK_MEAL_ITEM = { name: '', calories: '' };
+const blankMealForm = () => ({
+  title: '', description: '', category: 'diabetes_management',
+  totalCalories: '', duration: '7 days', imageUrl: '', tags: '',
+  breakfast: [{ ...BLANK_MEAL_ITEM }],
+  lunch:     [{ ...BLANK_MEAL_ITEM }],
+  dinner:    [{ ...BLANK_MEAL_ITEM }],
+  snacks:    [{ ...BLANK_MEAL_ITEM }],
+});
+
+function MealModal({ plan, onClose, onSuccess }) {
+  const [form, setForm] = useState(() => {
+    if (!plan) return blankMealForm();
+    return {
+      title:         plan.title || '',
+      description:   plan.description || '',
+      category:      plan.category || 'diabetes_management',
+      totalCalories: plan.totalCalories || '',
+      duration:      plan.duration || '7 days',
+      imageUrl:      plan.imageUrl || '',
+      tags:          (plan.tags || []).join(', '),
+      breakfast: plan.meals?.breakfast?.length ? plan.meals.breakfast : [{ ...BLANK_MEAL_ITEM }],
+      lunch:     plan.meals?.lunch?.length     ? plan.meals.lunch     : [{ ...BLANK_MEAL_ITEM }],
+      dinner:    plan.meals?.dinner?.length    ? plan.meals.dinner    : [{ ...BLANK_MEAL_ITEM }],
+      snacks:    plan.meals?.snacks?.length    ? plan.meals.snacks    : [{ ...BLANK_MEAL_ITEM }],
+    };
+  });
+  const [saving, setSaving] = useState(false);
+
+  const MEAL_SECTIONS = [
+    { key: 'breakfast', emoji: '🌅' },
+    { key: 'lunch',     emoji: '☀️' },
+    { key: 'dinner',    emoji: '🌙' },
+    { key: 'snacks',    emoji: '🍎' },
+  ];
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    if (!form.title.trim()) { toast.error('Title is required'); return; }
+    setSaving(true);
+    try {
+      const mapItems = (items) =>
+        (items || []).filter((i) => i.name?.trim()).map((i) => ({
+          name: i.name, calories: +i.calories || 0, protein: 0, carbs: 0, fat: 0,
+        }));
+      const payload = {
+        title: form.title,
+        description: form.description,
+        category: form.category,
+        totalCalories: +form.totalCalories || 0,
+        duration: form.duration,
+        imageUrl: form.imageUrl,
+        tags: form.tags ? form.tags.split(',').map((t) => t.trim()).filter(Boolean) : [],
+        meals: {
+          breakfast: mapItems(form.breakfast),
+          lunch:     mapItems(form.lunch),
+          dinner:    mapItems(form.dinner),
+          snacks:    mapItems(form.snacks),
+        },
+      };
+      const { data: res } = plan
+        ? await mealAPI.update(plan._id, payload)
+        : await mealAPI.create(payload);
+      toast.success(plan ? 'Meal plan updated!' : 'Meal plan added!');
+      onSuccess(res.data);
+      onClose();
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Failed to save meal plan');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-gray-950/85 backdrop-blur-sm"
+      onClick={onClose}
+    >
+      <motion.div initial={{ opacity: 0, scale: 0.94, y: 14 }} animate={{ opacity: 1, scale: 1, y: 0 }}
+        exit={{ opacity: 0, scale: 0.95 }} transition={{ duration: 0.25 }}
+        className="bg-gray-900 border border-gray-700/60 rounded-3xl w-full max-w-2xl max-h-[90vh] overflow-y-auto shadow-2xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="sticky top-0 bg-gray-900/95 backdrop-blur-sm border-b border-gray-800/60 px-6 py-4 flex items-center justify-between rounded-t-3xl z-10">
+          <h2 className="text-white font-black text-lg">{plan ? 'Edit Meal Plan' : 'Add Meal Plan'}</h2>
+          <button onClick={onClose} className="w-8 h-8 rounded-full bg-gray-800 hover:bg-gray-700 flex items-center justify-center text-gray-400 hover:text-white transition-all">
+            <FiX size={15} />
+          </button>
+        </div>
+        <form onSubmit={handleSubmit} className="p-6 space-y-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div className="sm:col-span-2">
+              <label className="block text-gray-300 text-xs font-medium mb-1.5">Title *</label>
+              <input value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} className="input-dark" placeholder="Meal plan title" required />
+            </div>
+            <div className="sm:col-span-2">
+              <label className="block text-gray-300 text-xs font-medium mb-1.5">Description</label>
+              <textarea rows={2} value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} className="input-dark resize-none" placeholder="Brief description..." />
+            </div>
+            <div>
+              <label className="block text-gray-300 text-xs font-medium mb-1.5">Category</label>
+              <select value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })} className="input-dark">
+                {['diabetes_management','weight_loss','muscle_building','weight_gain','maintenance'].map((c) => (
+                  <option key={c} value={c} className="bg-gray-800 capitalize">{c.replace(/_/g, ' ')}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="block text-gray-300 text-xs font-medium mb-1.5">Duration</label>
+              <input value={form.duration} onChange={(e) => setForm({ ...form, duration: e.target.value })} className="input-dark" placeholder="7 days" />
+            </div>
+            <div>
+              <label className="block text-gray-300 text-xs font-medium mb-1.5">Total Calories / Day</label>
+              <input type="number" value={form.totalCalories} onChange={(e) => setForm({ ...form, totalCalories: e.target.value })} className="input-dark" placeholder="1400" />
+            </div>
+            <div>
+              <label className="block text-gray-300 text-xs font-medium mb-1.5">Tags (comma-separated)</label>
+              <input value={form.tags} onChange={(e) => setForm({ ...form, tags: e.target.value })} className="input-dark" placeholder="diabetes, low-carb" />
+            </div>
+            <div className="sm:col-span-2">
+              <label className="block text-gray-300 text-xs font-medium mb-1.5">Image URL</label>
+              <input value={form.imageUrl} onChange={(e) => setForm({ ...form, imageUrl: e.target.value })} className="input-dark" placeholder="https://..." />
+            </div>
+          </div>
+
+          {MEAL_SECTIONS.map(({ key, emoji }) => (
+            <div key={key} className="bg-gray-800/40 rounded-xl p-4">
+              <h4 className="text-white font-bold text-xs capitalize mb-3 flex items-center gap-2">
+                <span>{emoji}</span> {key}
+              </h4>
+              <FoodRows items={form[key]} onChange={(updated) => setForm({ ...form, [key]: updated })} />
+            </div>
+          ))}
+
+          <button type="submit" disabled={saving}
+            className="w-full py-3.5 bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-400 hover:to-emerald-500 disabled:opacity-60 text-white font-bold rounded-xl shadow-lg shadow-green-500/20 transition-all text-sm flex items-center justify-center gap-2">
+            {saving ? <Spinner /> : null}
+            {saving ? 'Saving...' : plan ? 'Save Changes' : 'Add Meal Plan'}
           </button>
         </form>
       </motion.div>
@@ -188,7 +403,7 @@ function ExerciseModal({ exercise, onClose, onSave }) {
 }
 
 /* ── DASHBOARD TAB ── */
-function DashboardTab({ data, loading }) {
+function DashboardTab({ data, loading, onNavigate }) {
   if (loading) return (
     <div className="grid grid-cols-2 xl:grid-cols-4 gap-4">
       {Array.from({ length: 4 }).map((_, i) => (
@@ -231,7 +446,6 @@ function DashboardTab({ data, loading }) {
       </div>
 
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
-        {/* Recent Users */}
         <motion.div variants={fadeUp} className="bg-gray-800/50 border border-gray-700/40 rounded-2xl overflow-hidden">
           <div className="px-5 py-4 border-b border-gray-700/30">
             <h3 className="text-white font-bold text-sm">Recent Users</h3>
@@ -251,7 +465,6 @@ function DashboardTab({ data, loading }) {
           </div>
         </motion.div>
 
-        {/* Recent Posts */}
         <motion.div variants={fadeUp} className="bg-gray-800/50 border border-gray-700/40 rounded-2xl overflow-hidden">
           <div className="px-5 py-4 border-b border-gray-700/30">
             <h3 className="text-white font-bold text-sm">Recent Posts</h3>
@@ -266,32 +479,32 @@ function DashboardTab({ data, loading }) {
                 <span className={`px-2 py-0.5 rounded-full text-xs font-medium border whitespace-nowrap ${POST_CAT_COLORS[p.category] || POST_CAT_COLORS.general}`}>
                   {(p.category || '').replace('_', ' ')}
                 </span>
-                <div className="flex items-center gap-1.5 flex-shrink-0">
-                  <div className={`w-2 h-2 rounded-full ${p.isApproved ? 'bg-green-400' : 'bg-yellow-400'}`} title={p.isApproved ? 'Approved' : 'Pending'} />
-                </div>
+                <div className={`w-2 h-2 rounded-full flex-shrink-0 ${p.isApproved ? 'bg-green-400' : 'bg-yellow-400'}`} title={p.isApproved ? 'Approved' : 'Pending'} />
               </div>
             ))}
           </div>
         </motion.div>
       </div>
 
-      {/* Quick Actions */}
       <motion.div variants={fadeUp} className="bg-gray-800/50 border border-gray-700/40 rounded-2xl p-5">
         <h3 className="text-white font-bold text-sm mb-4">Quick Actions</h3>
         <div className="flex flex-wrap gap-3">
-          {[
-            { label: 'Add Exercise',  icon: FaDumbbell, color: 'from-green-500 to-emerald-600' },
-            { label: 'Add Meal Plan', icon: FaUtensils, color: 'from-orange-500 to-amber-600' },
-            { label: 'View Reports',  icon: FaFileAlt,  color: 'from-blue-500 to-indigo-600' },
-          ].map((a) => {
-            const Icon = a.icon;
-            return (
-              <button key={a.label} onClick={() => toast.success(`${a.label} clicked!`)}
-                className={`flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r ${a.color} text-white font-bold rounded-xl shadow-lg text-xs transition-all hover:scale-[1.03]`}>
-                <Icon size={13} /> {a.label}
-              </button>
-            );
-          })}
+          <button onClick={() => onNavigate('exercises')}
+            className="flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-green-500 to-emerald-600 text-white font-bold rounded-xl shadow-lg shadow-green-500/20 text-xs transition-all hover:scale-[1.03]">
+            <FaDumbbell size={13} /> Add Exercise
+          </button>
+          <button onClick={() => onNavigate('meals')}
+            className="flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-orange-500 to-amber-600 text-white font-bold rounded-xl shadow-lg shadow-orange-500/20 text-xs transition-all hover:scale-[1.03]">
+            <FaUtensils size={13} /> Add Meal Plan
+          </button>
+          <button onClick={() => onNavigate('community')}
+            className="flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-blue-500 to-indigo-600 text-white font-bold rounded-xl shadow-lg shadow-blue-500/20 text-xs transition-all hover:scale-[1.03]">
+            <FiMessageSquare size={13} /> Moderate Posts
+          </button>
+          <button onClick={() => onNavigate('analytics')}
+            className="flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-purple-500 to-violet-600 text-white font-bold rounded-xl shadow-lg shadow-purple-500/20 text-xs transition-all hover:scale-[1.03]">
+            <FaFileAlt size={13} /> View Analytics
+          </button>
         </div>
       </motion.div>
     </motion.div>
@@ -300,18 +513,22 @@ function DashboardTab({ data, loading }) {
 
 /* ── USERS TAB ── */
 function UsersTab() {
-  const [users, setUsers]           = useState([]);
-  const [total, setTotal]           = useState(0);
-  const [loading, setLoading]       = useState(true);
-  const [search, setSearch]         = useState('');
-  const [roleFilter, setRoleFilter] = useState('all');
-  const [page, setPage]             = useState(1);
+  const { user: currentUser } = useAuth();
+  const [users,       setUsers]       = useState([]);
+  const [total,       setTotal]       = useState(0);
+  const [loading,     setLoading]     = useState(true);
+  const [search,      setSearch]      = useState('');
+  const [roleFilter,  setRoleFilter]  = useState('all');
+  const [page,        setPage]        = useState(1);
+  const [editRoleId,  setEditRoleId]  = useState(null);
+  const [pendingRole, setPendingRole] = useState('');
+  const [busyId,      setBusyId]      = useState(null);
 
   const fetchUsers = useCallback(async () => {
     setLoading(true);
     try {
       const params = { page, limit: 10 };
-      if (search.trim()) params.search = search.trim();
+      if (search.trim())      params.search = search.trim();
       if (roleFilter !== 'all') params.role = roleFilter;
       const { data: res } = await adminAPI.getUsers(params);
       setUsers(res.data || []);
@@ -325,27 +542,51 @@ function UsersTab() {
 
   useEffect(() => { fetchUsers(); }, [fetchUsers]);
 
+  const startEditRole = (u) => { setEditRoleId(u._id); setPendingRole(u.role); };
+  const cancelEditRole = () => { setEditRoleId(null); setPendingRole(''); };
+
+  const saveRole = async (id) => {
+    setBusyId(id);
+    try {
+      await adminAPI.updateUserRole(id, pendingRole);
+      toast.success('Role updated successfully');
+      setEditRoleId(null);
+      await fetchUsers();
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Failed to update role');
+    } finally {
+      setBusyId(null);
+    }
+  };
+
   const toggleActive = async (id) => {
+    setBusyId(id);
     try {
       await adminAPI.toggleUserStatus(id);
-      setUsers((prev) => prev.map((u) => u._id === id ? { ...u, isActive: !u.isActive } : u));
       toast.success('User status updated');
+      await fetchUsers();
     } catch {
       toast.error('Failed to update status');
+    } finally {
+      setBusyId(null);
     }
   };
 
   const deleteUser = async (id) => {
     if (!window.confirm('Delete this user? This cannot be undone.')) return;
+    setBusyId(id);
     try {
       await adminAPI.deleteUser(id);
-      setUsers((prev) => prev.filter((u) => u._id !== id));
-      setTotal((t) => t - 1);
       toast.success('User deleted');
-    } catch {
-      toast.error('Failed to delete user');
+      await fetchUsers();
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Failed to delete user');
+    } finally {
+      setBusyId(null);
     }
   };
+
+  const pages = Math.ceil(total / 10);
 
   return (
     <motion.div initial="hidden" animate="visible" variants={{ visible: { transition: { staggerChildren: 0.07 } } }} className="space-y-5">
@@ -362,12 +603,7 @@ function UsersTab() {
         </select>
       </motion.div>
 
-      {loading ? (
-        <div className="bg-gray-800/50 border border-gray-700/40 rounded-2xl p-8 text-center">
-          <div className="w-8 h-8 border-2 border-green-500 border-t-transparent rounded-full animate-spin mx-auto mb-3" />
-          <p className="text-gray-400 text-sm">Loading users...</p>
-        </div>
-      ) : (
+      {loading ? <LoadingBox /> : (
         <motion.div variants={fadeUp} className="bg-gray-800/50 border border-gray-700/40 rounded-2xl overflow-hidden">
           <div className="px-5 py-3 border-b border-gray-700/30 flex items-center justify-between">
             <p className="text-gray-400 text-xs">{total} users</p>
@@ -382,43 +618,85 @@ function UsersTab() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-700/20">
-                {users.map((u, i) => (
-                  <motion.tr key={u._id} initial={{ opacity: 0, x: -8 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: i * 0.04 }}
-                    className={i % 2 === 0 ? 'bg-gray-900/10' : ''}>
-                    <td className="px-4 py-3">
-                      <div className="flex items-center gap-2.5">
-                        <Avatar name={u.name} gradient={nameToGradient(u.name)} />
-                        <div>
-                          <p className="text-white text-xs font-semibold">{u.name}</p>
-                          <p className="text-gray-500 text-xs">{u.email}</p>
+                {users.map((u, i) => {
+                  const isBusy      = busyId === u._id;
+                  const isEditRole  = editRoleId === u._id;
+                  const isSelf      = u._id === currentUser?._id;
+                  return (
+                    <motion.tr key={u._id} initial={{ opacity: 0, x: -8 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: i * 0.04 }}
+                      className={i % 2 === 0 ? 'bg-gray-900/10' : ''}>
+                      <td className="px-4 py-3">
+                        <div className="flex items-center gap-2.5">
+                          <Avatar name={u.name} gradient={nameToGradient(u.name)} />
+                          <div>
+                            <p className="text-white text-xs font-semibold">{u.name}</p>
+                            <p className="text-gray-500 text-xs">{u.email}</p>
+                          </div>
                         </div>
-                      </div>
-                    </td>
-                    <td className="px-4 py-3">
-                      <span className={`px-2.5 py-0.5 rounded-full text-xs font-medium border capitalize ${ROLE_COLORS[u.role] || ROLE_COLORS.user}`}>{u.role}</span>
-                    </td>
-                    <td className="px-4 py-3 text-gray-400 text-xs whitespace-nowrap">
-                      {u.createdAt ? new Date(u.createdAt).toLocaleDateString() : '—'}
-                    </td>
-                    <td className="px-4 py-3">
-                      <button onClick={() => toggleActive(u._id)} className={`transition-colors ${u.isActive !== false ? 'text-green-400 hover:text-green-300' : 'text-gray-600 hover:text-gray-400'}`}>
-                        {u.isActive !== false ? <FiToggleRight size={20} /> : <FiToggleLeft size={20} />}
-                      </button>
-                    </td>
-                    <td className="px-4 py-3">
-                      <button onClick={() => deleteUser(u._id)}
-                        className="w-7 h-7 rounded-lg bg-red-500/10 text-red-400 hover:bg-red-500/20 flex items-center justify-center transition-all">
-                        <FiTrash2 size={11} />
-                      </button>
-                    </td>
-                  </motion.tr>
-                ))}
+                      </td>
+                      <td className="px-4 py-3">
+                        {isEditRole ? (
+                          <div className="flex items-center gap-1.5">
+                            <select value={pendingRole} onChange={(e) => setPendingRole(e.target.value)}
+                              className="bg-gray-700 border border-gray-600 text-white text-xs rounded-lg px-2 py-1 focus:outline-none focus:border-green-500/50">
+                              <option value="user">user</option>
+                              <option value="trainer">trainer</option>
+                              <option value="admin">admin</option>
+                            </select>
+                            <button onClick={() => saveRole(u._id)} disabled={isBusy}
+                              className="w-6 h-6 rounded-lg bg-green-500/15 text-green-400 hover:bg-green-500/25 flex items-center justify-center transition-all">
+                              {isBusy ? <Spinner size="w-3 h-3" /> : <FiCheck size={11} />}
+                            </button>
+                            <button onClick={cancelEditRole}
+                              className="w-6 h-6 rounded-lg bg-gray-700 text-gray-400 hover:bg-gray-600 flex items-center justify-center transition-all">
+                              <FiX size={11} />
+                            </button>
+                          </div>
+                        ) : (
+                          <div className="flex items-center gap-1.5">
+                            <span className={`px-2.5 py-0.5 rounded-full text-xs font-medium border capitalize ${ROLE_COLORS[u.role] || ROLE_COLORS.user}`}>{u.role}</span>
+                            {!isSelf && (
+                              <button onClick={() => startEditRole(u)}
+                                className="w-5 h-5 rounded-md bg-gray-700/60 text-gray-500 hover:text-blue-400 hover:bg-blue-500/10 flex items-center justify-center transition-all">
+                                <FiEdit2 size={9} />
+                              </button>
+                            )}
+                          </div>
+                        )}
+                      </td>
+                      <td className="px-4 py-3 text-gray-400 text-xs whitespace-nowrap">
+                        {u.createdAt ? new Date(u.createdAt).toLocaleDateString() : '—'}
+                      </td>
+                      <td className="px-4 py-3">
+                        <button onClick={() => !isSelf && toggleActive(u._id)} disabled={isBusy || isSelf}
+                          className={`transition-colors ${isSelf ? 'opacity-30 cursor-not-allowed' : ''} ${u.isActive !== false ? 'text-green-400 hover:text-green-300' : 'text-gray-600 hover:text-gray-400'}`}>
+                          {isBusy ? <Spinner size="w-4 h-4" /> : u.isActive !== false ? <FiToggleRight size={20} /> : <FiToggleLeft size={20} />}
+                        </button>
+                      </td>
+                      <td className="px-4 py-3">
+                        <button onClick={() => !isSelf && deleteUser(u._id)} disabled={isBusy || isSelf}
+                          className={`w-7 h-7 rounded-lg bg-red-500/10 text-red-400 hover:bg-red-500/20 flex items-center justify-center transition-all ${isSelf ? 'opacity-30 cursor-not-allowed' : ''}`}>
+                          {isBusy ? <Spinner size="w-3 h-3" /> : <FiTrash2 size={11} />}
+                        </button>
+                      </td>
+                    </motion.tr>
+                  );
+                })}
               </tbody>
             </table>
-            {users.length === 0 && (
-              <p className="text-center text-gray-600 py-10 text-sm">No users match your search.</p>
-            )}
+            {users.length === 0 && <p className="text-center text-gray-600 py-10 text-sm">No users match your search.</p>}
           </div>
+          {pages > 1 && (
+            <div className="px-5 py-3 border-t border-gray-700/30 flex items-center justify-between">
+              <p className="text-gray-500 text-xs">Page {page} of {pages}</p>
+              <div className="flex gap-2">
+                <button onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={page === 1}
+                  className="px-3 py-1.5 bg-gray-700/50 text-gray-300 text-xs rounded-lg disabled:opacity-30 hover:bg-gray-700 transition-all">Prev</button>
+                <button onClick={() => setPage((p) => Math.min(pages, p + 1))} disabled={page === pages}
+                  className="px-3 py-1.5 bg-gray-700/50 text-gray-300 text-xs rounded-lg disabled:opacity-30 hover:bg-gray-700 transition-all">Next</button>
+              </div>
+            </div>
+          )}
         </motion.div>
       )}
     </motion.div>
@@ -431,6 +709,7 @@ function ExercisesTab() {
   const [loading,    setLoading]    = useState(true);
   const [modalOpen,  setModalOpen]  = useState(false);
   const [editTarget, setEditTarget] = useState(null);
+  const [busyId,     setBusyId]     = useState(null);
 
   const fetchExercises = useCallback(async () => {
     setLoading(true);
@@ -449,38 +728,38 @@ function ExercisesTab() {
   const openAdd  = () => { setEditTarget(null); setModalOpen(true); };
   const openEdit = (ex) => { setEditTarget(ex); setModalOpen(true); };
 
-  const toggleFeatured = async (id) => {
+  const handleSuccess = (saved) => {
+    if (editTarget) {
+      setExercises((prev) => prev.map((e) => e._id === saved._id ? saved : e));
+    } else {
+      setExercises((prev) => [saved, ...prev]);
+    }
+  };
+
+  const toggleFeatured = async (id, current) => {
+    setBusyId(id);
     try {
       await exerciseAPI.toggleFeatured(id);
-      setExercises((prev) => prev.map((e) => e._id === id ? { ...e, isFeatured: !e.isFeatured } : e));
-      toast.success('Featured status updated');
+      setExercises((prev) => prev.map((e) => e._id === id ? { ...e, isFeatured: !current } : e));
+      toast.success(current ? 'Removed from featured' : 'Added to featured');
     } catch {
       toast.error('Failed to update featured status');
+    } finally {
+      setBusyId(null);
     }
   };
 
   const deleteEx = async (id) => {
-    if (!window.confirm('Delete this exercise?')) return;
+    if (!window.confirm('Delete this exercise? This cannot be undone.')) return;
+    setBusyId(id);
     try {
       await exerciseAPI.delete(id);
       setExercises((prev) => prev.filter((e) => e._id !== id));
       toast.success('Exercise deleted');
-    } catch {
-      toast.error('Failed to delete exercise');
-    }
-  };
-
-  const handleSave = async (form) => {
-    try {
-      if (editTarget) {
-        const { data: res } = await exerciseAPI.update(editTarget._id, form);
-        setExercises((prev) => prev.map((e) => e._id === editTarget._id ? res.data : e));
-      } else {
-        const { data: res } = await exerciseAPI.create(form);
-        setExercises((prev) => [res.data, ...prev]);
-      }
-    } catch {
-      toast.error('Failed to save exercise');
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Failed to delete exercise');
+    } finally {
+      setBusyId(null);
     }
   };
 
@@ -494,12 +773,7 @@ function ExercisesTab() {
         </button>
       </motion.div>
 
-      {loading ? (
-        <div className="bg-gray-800/50 border border-gray-700/40 rounded-2xl p-8 text-center">
-          <div className="w-8 h-8 border-2 border-green-500 border-t-transparent rounded-full animate-spin mx-auto mb-3" />
-          <p className="text-gray-400 text-sm">Loading exercises...</p>
-        </div>
-      ) : (
+      {loading ? <LoadingBox /> : (
         <motion.div variants={fadeUp} className="bg-gray-800/50 border border-gray-700/40 rounded-2xl overflow-hidden">
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
@@ -511,42 +785,45 @@ function ExercisesTab() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-700/20">
-                {exercises.map((ex, i) => (
-                  <motion.tr key={ex._id} initial={{ opacity: 0, x: -8 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: i * 0.04 }}
-                    className={i % 2 === 0 ? 'bg-gray-900/10' : ''}>
-                    <td className="px-4 py-3">
-                      <div className="flex items-center gap-3">
-                        <img src={ex.imageUrl} alt={ex.title} className="w-10 h-10 rounded-xl object-cover flex-shrink-0 bg-gray-700" />
-                        <span className="text-white text-xs font-medium">{ex.title}</span>
-                      </div>
-                    </td>
-                    <td className="px-4 py-3">
-                      <span className={`px-2.5 py-0.5 rounded-full text-xs font-medium border capitalize ${CAT_COLORS[ex.category] || 'bg-gray-500/15 text-gray-400 border-gray-500/20'}`}>
-                        {(ex.category || '').replace('_', ' ')}
-                      </span>
-                    </td>
-                    <td className="px-4 py-3 text-gray-400 text-xs capitalize">{ex.difficulty}</td>
-                    <td className="px-4 py-3 text-gray-400 text-xs">{ex.duration} min</td>
-                    <td className="px-4 py-3">
-                      <button onClick={() => toggleFeatured(ex._id)}
-                        className={`transition-colors ${ex.isFeatured ? 'text-yellow-400 hover:text-yellow-300' : 'text-gray-600 hover:text-gray-400'}`}>
-                        <FiStar size={15} fill={ex.isFeatured ? 'currentColor' : 'none'} />
-                      </button>
-                    </td>
-                    <td className="px-4 py-3">
-                      <div className="flex items-center gap-2">
-                        <button onClick={() => openEdit(ex)}
-                          className="w-7 h-7 rounded-lg bg-blue-500/10 text-blue-400 hover:bg-blue-500/20 flex items-center justify-center transition-all">
-                          <FiEdit2 size={11} />
+                {exercises.map((ex, i) => {
+                  const isBusy = busyId === ex._id;
+                  return (
+                    <motion.tr key={ex._id} initial={{ opacity: 0, x: -8 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: i * 0.03 }}
+                      className={i % 2 === 0 ? 'bg-gray-900/10' : ''}>
+                      <td className="px-4 py-3">
+                        <div className="flex items-center gap-3">
+                          <img src={ex.imageUrl} alt={ex.title} className="w-10 h-10 rounded-xl object-cover flex-shrink-0 bg-gray-700" />
+                          <span className="text-white text-xs font-medium">{ex.title}</span>
+                        </div>
+                      </td>
+                      <td className="px-4 py-3">
+                        <span className={`px-2.5 py-0.5 rounded-full text-xs font-medium border capitalize ${CAT_COLORS[ex.category] || 'bg-gray-500/15 text-gray-400 border-gray-500/20'}`}>
+                          {(ex.category || '').replace(/_/g, ' ')}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3 text-gray-400 text-xs capitalize">{ex.difficulty}</td>
+                      <td className="px-4 py-3 text-gray-400 text-xs">{ex.duration} min</td>
+                      <td className="px-4 py-3">
+                        <button onClick={() => toggleFeatured(ex._id, ex.isFeatured)} disabled={isBusy}
+                          className={`transition-colors ${ex.isFeatured ? 'text-yellow-400 hover:text-yellow-300' : 'text-gray-600 hover:text-gray-400'}`}>
+                          {isBusy ? <Spinner size="w-3.5 h-3.5" /> : <FiStar size={15} fill={ex.isFeatured ? 'currentColor' : 'none'} />}
                         </button>
-                        <button onClick={() => deleteEx(ex._id)}
-                          className="w-7 h-7 rounded-lg bg-red-500/10 text-red-400 hover:bg-red-500/20 flex items-center justify-center transition-all">
-                          <FiTrash2 size={11} />
-                        </button>
-                      </div>
-                    </td>
-                  </motion.tr>
-                ))}
+                      </td>
+                      <td className="px-4 py-3">
+                        <div className="flex items-center gap-2">
+                          <button onClick={() => openEdit(ex)}
+                            className="w-7 h-7 rounded-lg bg-blue-500/10 text-blue-400 hover:bg-blue-500/20 flex items-center justify-center transition-all">
+                            <FiEdit2 size={11} />
+                          </button>
+                          <button onClick={() => deleteEx(ex._id)} disabled={isBusy}
+                            className="w-7 h-7 rounded-lg bg-red-500/10 text-red-400 hover:bg-red-500/20 flex items-center justify-center transition-all">
+                            {isBusy ? <Spinner size="w-3 h-3" /> : <FiTrash2 size={11} />}
+                          </button>
+                        </div>
+                      </td>
+                    </motion.tr>
+                  );
+                })}
               </tbody>
             </table>
             {exercises.length === 0 && <p className="text-center text-gray-600 py-10 text-sm">No exercises found.</p>}
@@ -555,8 +832,264 @@ function ExercisesTab() {
       )}
 
       <AnimatePresence>
-        {modalOpen && <ExerciseModal key="ex-modal" exercise={editTarget} onClose={() => setModalOpen(false)} onSave={handleSave} />}
+        {modalOpen && (
+          <ExerciseModal key="ex-modal" exercise={editTarget} onClose={() => setModalOpen(false)} onSuccess={handleSuccess} />
+        )}
       </AnimatePresence>
+    </motion.div>
+  );
+}
+
+/* ── MEAL PLANS TAB ── */
+function MealPlansTab() {
+  const [plans,      setPlans]      = useState([]);
+  const [loading,    setLoading]    = useState(true);
+  const [modalOpen,  setModalOpen]  = useState(false);
+  const [editTarget, setEditTarget] = useState(null);
+  const [busyId,     setBusyId]     = useState(null);
+
+  const fetchPlans = useCallback(async () => {
+    setLoading(true);
+    try {
+      const { data: res } = await mealAPI.getAll({ limit: 50 });
+      setPlans(res.data || []);
+    } catch {
+      toast.error('Failed to load meal plans');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { fetchPlans(); }, [fetchPlans]);
+
+  const openAdd  = () => { setEditTarget(null); setModalOpen(true); };
+  const openEdit = (p) => { setEditTarget(p); setModalOpen(true); };
+
+  const handleSuccess = (saved) => {
+    if (editTarget) {
+      setPlans((prev) => prev.map((p) => p._id === saved._id ? saved : p));
+    } else {
+      setPlans((prev) => [saved, ...prev]);
+    }
+  };
+
+  const toggleFeatured = async (id, current) => {
+    setBusyId(id);
+    try {
+      const { data: res } = await mealAPI.update(id, { isFeatured: !current });
+      setPlans((prev) => prev.map((p) => p._id === id ? { ...p, isFeatured: !current } : p));
+      toast.success(current ? 'Removed from featured' : 'Added to featured');
+    } catch {
+      toast.error('Failed to update featured status');
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const deletePlan = async (id) => {
+    if (!window.confirm('Delete this meal plan? This cannot be undone.')) return;
+    setBusyId(id);
+    try {
+      await mealAPI.delete(id);
+      setPlans((prev) => prev.filter((p) => p._id !== id));
+      toast.success('Meal plan deleted');
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Failed to delete meal plan');
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  return (
+    <motion.div initial="hidden" animate="visible" variants={{ visible: { transition: { staggerChildren: 0.07 } } }} className="space-y-5">
+      <motion.div variants={fadeUp} className="flex justify-between items-center">
+        <p className="text-gray-400 text-sm">{plans.length} meal plans</p>
+        <button onClick={openAdd}
+          className="flex items-center gap-2 px-4 py-2.5 bg-gradient-to-r from-orange-500 to-amber-600 text-white font-bold rounded-xl shadow-lg shadow-orange-500/20 text-xs transition-all hover:scale-[1.03]">
+          <FiPlus size={13} /> Add Meal Plan
+        </button>
+      </motion.div>
+
+      {loading ? <LoadingBox /> : (
+        <motion.div variants={fadeUp} className="bg-gray-800/50 border border-gray-700/40 rounded-2xl overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="bg-gray-900/60">
+                  {['Meal Plan', 'Category', 'Calories/Day', 'Duration', 'Featured', 'Actions'].map((h) => (
+                    <th key={h} className="text-left px-4 py-3 text-gray-400 text-xs font-semibold uppercase tracking-wider whitespace-nowrap">{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-700/20">
+                {plans.map((p, i) => {
+                  const isBusy = busyId === p._id;
+                  return (
+                    <motion.tr key={p._id} initial={{ opacity: 0, x: -8 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: i * 0.03 }}
+                      className={i % 2 === 0 ? 'bg-gray-900/10' : ''}>
+                      <td className="px-4 py-3">
+                        <div className="flex items-center gap-3">
+                          <img src={p.imageUrl} alt={p.title} className="w-10 h-10 rounded-xl object-cover flex-shrink-0 bg-gray-700" onError={(e) => { e.target.style.display = 'none'; }} />
+                          <span className="text-white text-xs font-medium">{p.title}</span>
+                        </div>
+                      </td>
+                      <td className="px-4 py-3">
+                        <span className={`px-2.5 py-0.5 rounded-full text-xs font-medium border capitalize ${MEAL_CAT_COLORS[p.category] || 'bg-gray-500/15 text-gray-400 border-gray-500/20'}`}>
+                          {(p.category || '').replace(/_/g, ' ')}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3 text-gray-400 text-xs">{(p.totalCalories || 0).toLocaleString()} kcal</td>
+                      <td className="px-4 py-3 text-gray-400 text-xs">{p.duration}</td>
+                      <td className="px-4 py-3">
+                        <button onClick={() => toggleFeatured(p._id, p.isFeatured)} disabled={isBusy}
+                          className={`transition-colors ${p.isFeatured ? 'text-yellow-400 hover:text-yellow-300' : 'text-gray-600 hover:text-gray-400'}`}>
+                          {isBusy ? <Spinner size="w-3.5 h-3.5" /> : <FiStar size={15} fill={p.isFeatured ? 'currentColor' : 'none'} />}
+                        </button>
+                      </td>
+                      <td className="px-4 py-3">
+                        <div className="flex items-center gap-2">
+                          <button onClick={() => openEdit(p)}
+                            className="w-7 h-7 rounded-lg bg-blue-500/10 text-blue-400 hover:bg-blue-500/20 flex items-center justify-center transition-all">
+                            <FiEdit2 size={11} />
+                          </button>
+                          <button onClick={() => deletePlan(p._id)} disabled={isBusy}
+                            className="w-7 h-7 rounded-lg bg-red-500/10 text-red-400 hover:bg-red-500/20 flex items-center justify-center transition-all">
+                            {isBusy ? <Spinner size="w-3 h-3" /> : <FiTrash2 size={11} />}
+                          </button>
+                        </div>
+                      </td>
+                    </motion.tr>
+                  );
+                })}
+              </tbody>
+            </table>
+            {plans.length === 0 && <p className="text-center text-gray-600 py-10 text-sm">No meal plans found.</p>}
+          </div>
+        </motion.div>
+      )}
+
+      <AnimatePresence>
+        {modalOpen && (
+          <MealModal key="meal-modal" plan={editTarget} onClose={() => setModalOpen(false)} onSuccess={handleSuccess} />
+        )}
+      </AnimatePresence>
+    </motion.div>
+  );
+}
+
+/* ── COMMUNITY TAB ── */
+function CommunityTab() {
+  const [posts,    setPosts]    = useState([]);
+  const [loading,  setLoading]  = useState(true);
+  const [busyId,   setBusyId]   = useState(null);
+
+  const fetchPosts = useCallback(async () => {
+    setLoading(true);
+    try {
+      const { data: res } = await adminAPI.getPosts({ limit: 50 });
+      setPosts(res.data || []);
+    } catch {
+      toast.error('Failed to load posts');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { fetchPosts(); }, [fetchPosts]);
+
+  const approvePost = async (id) => {
+    setBusyId(id);
+    try {
+      await adminAPI.approvePost(id);
+      setPosts((prev) => prev.map((p) => p._id === id ? { ...p, isApproved: true } : p));
+      toast.success('Post approved');
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Failed to approve post');
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const deletePost = async (id) => {
+    if (!window.confirm('Delete this post? This cannot be undone.')) return;
+    setBusyId(id);
+    try {
+      await communityAPI.deletePost(id);
+      setPosts((prev) => prev.filter((p) => p._id !== id));
+      toast.success('Post deleted');
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Failed to delete post');
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  return (
+    <motion.div initial="hidden" animate="visible" variants={{ visible: { transition: { staggerChildren: 0.07 } } }} className="space-y-5">
+      <motion.div variants={fadeUp} className="flex justify-between items-center">
+        <p className="text-gray-400 text-sm">{posts.length} posts</p>
+        <button onClick={fetchPosts} className="flex items-center gap-2 px-4 py-2.5 bg-gray-800 border border-gray-700/40 hover:border-green-500/30 text-gray-300 text-xs font-medium rounded-xl transition-all">
+          ↻ Refresh
+        </button>
+      </motion.div>
+
+      {loading ? <LoadingBox /> : (
+        <motion.div variants={fadeUp} className="bg-gray-800/50 border border-gray-700/40 rounded-2xl overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="bg-gray-900/60">
+                  {['Title', 'Author', 'Category', 'Status', 'Date', 'Actions'].map((h) => (
+                    <th key={h} className="text-left px-4 py-3 text-gray-400 text-xs font-semibold uppercase tracking-wider whitespace-nowrap">{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-700/20">
+                {posts.map((p, i) => {
+                  const isBusy = busyId === p._id;
+                  return (
+                    <motion.tr key={p._id} initial={{ opacity: 0, x: -8 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: i * 0.03 }}
+                      className={i % 2 === 0 ? 'bg-gray-900/10' : ''}>
+                      <td className="px-4 py-3 max-w-[220px]">
+                        <p className="text-white text-xs font-medium truncate">{p.title}</p>
+                      </td>
+                      <td className="px-4 py-3 text-gray-400 text-xs whitespace-nowrap">{p.author?.name || '—'}</td>
+                      <td className="px-4 py-3">
+                        <span className={`px-2 py-0.5 rounded-full text-xs font-medium border capitalize ${POST_CAT_COLORS[p.category] || POST_CAT_COLORS.general}`}>
+                          {(p.category || '').replace('_', ' ')}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3">
+                        <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${p.isApproved ? 'bg-green-500/15 text-green-400' : 'bg-yellow-500/15 text-yellow-400'}`}>
+                          {p.isApproved ? 'Approved' : 'Pending'}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3 text-gray-500 text-xs whitespace-nowrap">
+                        {p.createdAt ? new Date(p.createdAt).toLocaleDateString() : '—'}
+                      </td>
+                      <td className="px-4 py-3">
+                        <div className="flex items-center gap-2">
+                          {!p.isApproved && (
+                            <button onClick={() => approvePost(p._id)} disabled={isBusy}
+                              className="w-7 h-7 rounded-lg bg-green-500/10 text-green-400 hover:bg-green-500/20 flex items-center justify-center transition-all" title="Approve">
+                              {isBusy ? <Spinner size="w-3 h-3" /> : <FiCheck size={11} />}
+                            </button>
+                          )}
+                          <button onClick={() => deletePost(p._id)} disabled={isBusy}
+                            className="w-7 h-7 rounded-lg bg-red-500/10 text-red-400 hover:bg-red-500/20 flex items-center justify-center transition-all" title="Delete">
+                            {isBusy ? <Spinner size="w-3 h-3" /> : <FiTrash2 size={11} />}
+                          </button>
+                        </div>
+                      </td>
+                    </motion.tr>
+                  );
+                })}
+              </tbody>
+            </table>
+            {posts.length === 0 && <p className="text-center text-gray-600 py-10 text-sm">No posts found.</p>}
+          </div>
+        </motion.div>
+      )}
     </motion.div>
   );
 }
@@ -661,15 +1194,14 @@ const NAV = [
   { id: 'meals',     label: 'Meal Plans', icon: FiBookOpen },
   { id: 'community', label: 'Community',  icon: FiMessageSquare },
   { id: 'analytics', label: 'Analytics',  icon: FiBarChart2 },
-  { id: 'settings',  label: 'Settings',   icon: FiSettings },
 ];
 
 /* ══ MAIN ══ */
 export default function AdminDashboard() {
   const { user, isAuthenticated, logout } = useAuth();
-  const [active, setActive]         = useState('dashboard');
+  const [active,      setActive]      = useState('dashboard');
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [dashData, setDashData]     = useState(null);
+  const [dashData,    setDashData]    = useState(null);
   const [dashLoading, setDashLoading] = useState(true);
 
   useEffect(() => {
@@ -683,23 +1215,18 @@ export default function AdminDashboard() {
 
   const renderContent = () => {
     switch (active) {
-      case 'dashboard': return <DashboardTab data={dashData} loading={dashLoading} />;
+      case 'dashboard': return <DashboardTab data={dashData} loading={dashLoading} onNavigate={setActive} />;
       case 'users':     return <UsersTab />;
       case 'exercises': return <ExercisesTab />;
+      case 'meals':     return <MealPlansTab />;
+      case 'community': return <CommunityTab />;
       case 'analytics': return <AnalyticsTab />;
-      default: return (
-        <motion.div initial={{ opacity: 0, y: 14 }} animate={{ opacity: 1, y: 0 }} className="flex flex-col items-center justify-center py-24 text-center">
-          <p className="text-5xl mb-4">🚧</p>
-          <h3 className="text-white font-black text-xl mb-2 capitalize">{active} Management</h3>
-          <p className="text-gray-500 text-sm">This section is under development.</p>
-        </motion.div>
-      );
+      default: return null;
     }
   };
 
   return (
     <div className="min-h-screen bg-gray-950 flex">
-
       <AnimatePresence>
         {sidebarOpen && (
           <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
