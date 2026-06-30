@@ -1,0 +1,42 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  *, *::before, *::after { box-sizing: border-box; }
+
+  html { scroll-behavior: smooth; }
+
+  body {
+    margin: 0;
+    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    background-color: #030712;
+    color: #f9fafb;
+  }
+
+  #root { min-height: 100vh; }
+}
+
+@layer utilities {
+  .gradient-text {
+    @apply bg-gradient-to-r from-green-400 to-emerald-500 bg-clip-text text-transparent;
+  }
+
+  .btn-primary {
+    @apply bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-600 hover:to-emerald-700
+           text-white font-semibold rounded-xl px-6 py-3 transition-all duration-200
+           shadow-lg shadow-green-500/25 hover:shadow-green-500/40 disabled:opacity-60 disabled:cursor-not-allowed;
+  }
+
+  .card-dark {
+    @apply bg-gray-800/50 border border-gray-700/50 rounded-2xl backdrop-blur-sm;
+  }
+
+  .input-dark {
+    @apply w-full bg-gray-800 border border-gray-700 rounded-xl px-4 py-3 text-gray-100
+           placeholder-gray-500 focus:outline-none focus:border-green-500 focus:ring-1
+           focus:ring-green-500 transition-colors;
+  }
+}

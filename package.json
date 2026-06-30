@@ -1,0 +1,21 @@
+{
+  "name": "fittrack",
+  "version": "1.0.0",
+  "description": "FitTrack fitness web application monorepo",
+  "scripts": {
+    "dev": "concurrently \"npm run server\" \"npm run client\"",
+    "client": "cd client && npm run dev",
+    "server": "cd server && nodemon index.js",
+    "install:all": "npm install && cd client && npm install && cd ../server && npm install"
+  },
+  "keywords": [
+    "fitness",
+    "health",
+    "tracker"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "concurrently": "^10.0.3"
+  }
+}
